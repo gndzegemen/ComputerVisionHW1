@@ -52,6 +52,12 @@ face_recognizer = cv2.FaceRecognizerSF.create(str(SFACE_PATH), "")
 person_model = YOLO(str(YOLO_PATH))
 
 
+def apply_separable(image, row_matrix, col_matrix):
+    channels = image.astype(np.float32).transpose(2, 0, 1)
+    result = row_matrix @ channels @ col_matrix.T
+    return np.clip(result.transpose(1, 2, 0), 0, 255).astype(np.uint8)
+
+
 @lru_cache(maxsize=None)
 def gaussian_matrix(n, k):
     sigma = 0.3 * ((k - 1) * 0.5 - 1) + 0.8
@@ -61,36 +67,17 @@ def gaussian_matrix(n, k):
     return (weights / weights.sum(axis=1, keepdims=True)).astype(np.float32)
 
 
+def gaussian_blur(image, k):
+    h, w = image.shape[:2]
+    return apply_separable(image, gaussian_matrix(h, k), gaussian_matrix(w, k))
+
+
 @lru_cache(maxsize=None)
 def mean_matrix(n, k):
     index = np.arange(n)
     distance = index[None, :] - index[:, None]
     weights = (np.abs(distance) <= k // 2).astype(np.float32)
     return weights / weights.sum(axis=1, keepdims=True)
-
-
-@lru_cache(maxsize=None)
-def upsample_matrix(n_out, n_in):
-    position = np.clip((np.arange(n_out) + 0.5) * n_in / n_out - 0.5, 0, n_in - 1)
-    left = np.floor(position).astype(int)
-    right = np.minimum(left + 1, n_in - 1)
-    fraction = (position - left).astype(np.float32)
-    matrix = np.zeros((n_out, n_in), np.float32)
-    rows = np.arange(n_out)
-    matrix[rows, left] += 1 - fraction
-    matrix[rows, right] += fraction
-    return matrix
-
-
-def apply_separable(image, row_matrix, col_matrix):
-    channels = image.astype(np.float32).transpose(2, 0, 1)
-    result = row_matrix @ channels @ col_matrix.T
-    return np.clip(result.transpose(1, 2, 0), 0, 255).astype(np.uint8)
-
-
-def gaussian_blur(image, k):
-    h, w = image.shape[:2]
-    return apply_separable(image, gaussian_matrix(h, k), gaussian_matrix(w, k))
 
 
 def mean_blur(image, k):
@@ -105,6 +92,19 @@ def sample_windows(image, k):
     samples = image[start::SAMPLE_STEP, start::SAMPLE_STEP].astype(np.float32)
     padded = np.pad(samples, ((radius, radius), (radius, radius), (0, 0)), mode="edge")
     return sliding_window_view(padded, (size, size), axis=(0, 1))
+
+
+@lru_cache(maxsize=None)
+def upsample_matrix(n_out, n_in):
+    position = np.clip((np.arange(n_out) + 0.5) * n_in / n_out - 0.5, 0, n_in - 1)
+    left = np.floor(position).astype(int)
+    right = np.minimum(left + 1, n_in - 1)
+    fraction = (position - left).astype(np.float32)
+    matrix = np.zeros((n_out, n_in), np.float32)
+    rows = np.arange(n_out)
+    matrix[rows, left] += 1 - fraction
+    matrix[rows, right] += fraction
+    return matrix
 
 
 def upsample(small, h, w):
