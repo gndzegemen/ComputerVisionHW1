@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# IDE
+.idea/
+
+# Downloaded models, registered faces and generated images
+models/
+outputs/

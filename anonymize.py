@@ -1,10 +1,12 @@
 import sys
 import time
 import urllib.request
+from functools import lru_cache
 from pathlib import Path
 
 import cv2
 import numpy as np
+from numpy.lib.stride_tricks import sliding_window_view
 from ultralytics import YOLO
 
 
@@ -24,13 +26,16 @@ YOLO_PATH = MODEL_DIR / "yolov8n-seg.pt"
 TARGET_PATH = MODEL_DIR / "target_face.npy"
 
 BLUR_KERNEL = 61
+SAMPLE_STEP = 8
+BILATERAL_SIGMA_SPACE = 20
+BILATERAL_SIGMA_COLOR = 40
 MATCH_THRESHOLD = 0.363
 TARGET_MEMORY = 10
 
-BLUR_METHODS = ["Gaussian", "Median", "Pixelation"]
+BLUR_METHODS = ["Gaussian", "Mean", "Median", "Bilateral", "Pixelation"]
 WINDOW = "Anonymizer"
 MODE_TRACKBAR = "Mode 1-3"
-BLUR_TRACKBAR = "Blur 0G 1M 2P"
+BLUR_TRACKBAR = "Blur 0-4"
 
 
 def download_if_missing(url, path):
@@ -49,18 +54,105 @@ face_recognizer = cv2.FaceRecognizerSF.create(str(SFACE_PATH), "")
 person_model = YOLO(str(YOLO_PATH))
 
 
-def blur(image, method):
-    k = BLUR_KERNEL
+@lru_cache(maxsize=None)
+def gaussian_matrix(n, k):
+    sigma = 0.3 * ((k - 1) * 0.5 - 1) + 0.8
+    index = np.arange(n)
+    distance = index[None, :] - index[:, None]
+    weights = np.exp(-distance ** 2 / (2 * sigma ** 2)) * (np.abs(distance) <= k // 2)
+    return (weights / weights.sum(axis=1, keepdims=True)).astype(np.float32)
 
-    if method == "Gaussian":
-        return cv2.GaussianBlur(image, (k, k), 0)
 
-    if method == "Median":
-        return cv2.medianBlur(image, k)
+@lru_cache(maxsize=None)
+def mean_matrix(n, k):
+    index = np.arange(n)
+    distance = index[None, :] - index[:, None]
+    weights = (np.abs(distance) <= k // 2).astype(np.float32)
+    return weights / weights.sum(axis=1, keepdims=True)
 
+
+@lru_cache(maxsize=None)
+def upsample_matrix(n_out, n_in):
+    position = np.clip((np.arange(n_out) + 0.5) * n_in / n_out - 0.5, 0, n_in - 1)
+    left = np.floor(position).astype(int)
+    right = np.minimum(left + 1, n_in - 1)
+    fraction = (position - left).astype(np.float32)
+    matrix = np.zeros((n_out, n_in), np.float32)
+    rows = np.arange(n_out)
+    matrix[rows, left] += 1 - fraction
+    matrix[rows, right] += fraction
+    return matrix
+
+
+def apply_separable(image, row_matrix, col_matrix):
+    channels = image.astype(np.float32).transpose(2, 0, 1)
+    result = row_matrix @ channels @ col_matrix.T
+    return np.clip(result.transpose(1, 2, 0), 0, 255).astype(np.uint8)
+
+
+def gaussian_blur(image, k):
     h, w = image.shape[:2]
-    small = cv2.resize(image, (w // k, h // k), interpolation=cv2.INTER_LINEAR)
-    return cv2.resize(small, (w, h), interpolation=cv2.INTER_NEAREST)
+    return apply_separable(image, gaussian_matrix(h, k), gaussian_matrix(w, k))
+
+
+def mean_blur(image, k):
+    h, w = image.shape[:2]
+    return apply_separable(image, mean_matrix(h, k), mean_matrix(w, k))
+
+
+def sample_windows(image, k):
+    size = (k // SAMPLE_STEP) | 1
+    radius = size // 2
+    start = SAMPLE_STEP // 2
+    samples = image[start::SAMPLE_STEP, start::SAMPLE_STEP].astype(np.float32)
+    padded = np.pad(samples, ((radius, radius), (radius, radius), (0, 0)), mode="edge")
+    windows = sliding_window_view(padded, (size, size), axis=(0, 1))
+    return samples, windows
+
+
+def upsample(small, h, w):
+    return apply_separable(small, upsample_matrix(h, small.shape[0]), upsample_matrix(w, small.shape[1]))
+
+
+def median_blur(image, k):
+    _, windows = sample_windows(image, k)
+    medians = np.median(windows, axis=(-2, -1))
+    h, w = image.shape[:2]
+    return upsample(medians, h, w)
+
+
+def bilateral_blur(image, k):
+    samples, windows = sample_windows(image, k)
+    size = windows.shape[-1]
+    offset = (np.arange(size) - size // 2) * SAMPLE_STEP
+    space_distance = offset[:, None] ** 2 + offset[None, :] ** 2
+    space_weight = np.exp(-space_distance / (2 * BILATERAL_SIGMA_SPACE ** 2))
+    color_distance = ((windows - samples[..., None, None]) ** 2).sum(axis=2, keepdims=True)
+    color_weight = np.exp(-color_distance / (2 * BILATERAL_SIGMA_COLOR ** 2))
+    weights = space_weight * color_weight
+    filtered = (weights * windows).sum(axis=(-2, -1)) / weights.sum(axis=(-2, -1))
+    h, w = image.shape[:2]
+    return upsample(filtered, h, w)
+
+
+def pixelate(image, k):
+    h, w = image.shape[:2]
+    padded = np.pad(image, ((0, -h % k), (0, -w % k), (0, 0)), mode="edge")
+    ph, pw = padded.shape[:2]
+    blocks = padded.reshape(ph // k, k, pw // k, k, 3).mean(axis=(1, 3)).astype(np.uint8)
+    return np.repeat(np.repeat(blocks, k, axis=0), k, axis=1)[:h, :w]
+
+
+def blur(image, method):
+    if method == "Gaussian":
+        return gaussian_blur(image, BLUR_KERNEL)
+    if method == "Mean":
+        return mean_blur(image, BLUR_KERNEL)
+    if method == "Median":
+        return median_blur(image, BLUR_KERNEL)
+    if method == "Bilateral":
+        return bilateral_blur(image, BLUR_KERNEL)
+    return pixelate(image, BLUR_KERNEL)
 
 
 def keep_sharp(original, blurred, mask):
@@ -199,7 +291,7 @@ def main():
 
     cv2.namedWindow(WINDOW)
     cv2.createTrackbar(MODE_TRACKBAR, WINDOW, 1, 3, lambda value: None)
-    cv2.createTrackbar(BLUR_TRACKBAR, WINDOW, 0, 2, lambda value: None)
+    cv2.createTrackbar(BLUR_TRACKBAR, WINDOW, 0, len(BLUR_METHODS) - 1, lambda value: None)
     cv2.setTrackbarMin(MODE_TRACKBAR, WINDOW, 1)
 
     while True:
