@@ -27,15 +27,13 @@ TARGET_PATH = MODEL_DIR / "target_face.npy"
 
 BLUR_KERNEL = 61
 SAMPLE_STEP = 8
-BILATERAL_SIGMA_SPACE = 20
-BILATERAL_SIGMA_COLOR = 40
 MATCH_THRESHOLD = 0.363
 TARGET_MEMORY = 10
 
-BLUR_METHODS = ["Gaussian", "Mean", "Median", "Bilateral", "Pixelation"]
+BLUR_METHODS = ["Gaussian", "Mean", "Median", "Pixelation"]
 WINDOW = "Anonymizer"
 MODE_TRACKBAR = "Mode 1-3"
-BLUR_TRACKBAR = "Blur 0-4"
+BLUR_TRACKBAR = "Blur 0-3"
 
 
 def download_if_missing(url, path):
@@ -106,8 +104,7 @@ def sample_windows(image, k):
     start = SAMPLE_STEP // 2
     samples = image[start::SAMPLE_STEP, start::SAMPLE_STEP].astype(np.float32)
     padded = np.pad(samples, ((radius, radius), (radius, radius), (0, 0)), mode="edge")
-    windows = sliding_window_view(padded, (size, size), axis=(0, 1))
-    return samples, windows
+    return sliding_window_view(padded, (size, size), axis=(0, 1))
 
 
 def upsample(small, h, w):
@@ -115,24 +112,10 @@ def upsample(small, h, w):
 
 
 def median_blur(image, k):
-    _, windows = sample_windows(image, k)
+    windows = sample_windows(image, k)
     medians = np.median(windows, axis=(-2, -1))
     h, w = image.shape[:2]
     return upsample(medians, h, w)
-
-
-def bilateral_blur(image, k):
-    samples, windows = sample_windows(image, k)
-    size = windows.shape[-1]
-    offset = (np.arange(size) - size // 2) * SAMPLE_STEP
-    space_distance = offset[:, None] ** 2 + offset[None, :] ** 2
-    space_weight = np.exp(-space_distance / (2 * BILATERAL_SIGMA_SPACE ** 2))
-    color_distance = ((windows - samples[..., None, None]) ** 2).sum(axis=2, keepdims=True)
-    color_weight = np.exp(-color_distance / (2 * BILATERAL_SIGMA_COLOR ** 2))
-    weights = space_weight * color_weight
-    filtered = (weights * windows).sum(axis=(-2, -1)) / weights.sum(axis=(-2, -1))
-    h, w = image.shape[:2]
-    return upsample(filtered, h, w)
 
 
 def pixelate(image, k):
@@ -150,8 +133,6 @@ def blur(image, method):
         return mean_blur(image, BLUR_KERNEL)
     if method == "Median":
         return median_blur(image, BLUR_KERNEL)
-    if method == "Bilateral":
-        return bilateral_blur(image, BLUR_KERNEL)
     return pixelate(image, BLUR_KERNEL)
 
 
