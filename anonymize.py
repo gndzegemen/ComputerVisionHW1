@@ -86,10 +86,12 @@ def mean_blur(image, k):
 
 def pixelate(image, k):
     h, w = image.shape[:2]
-    padded = np.pad(image, ((0, -h % k), (0, -w % k), (0, 0)), mode="edge")
-    ph, pw = padded.shape[:2]
-    blocks = padded.reshape(ph // k, k, pw // k, k, 3).mean(axis=(1, 3)).astype(np.uint8)
-    return np.repeat(np.repeat(blocks, k, axis=0), k, axis=1)[:h, :w]
+    result = image.copy()
+    for y in range(0, h, k):
+        for x in range(0, w, k):
+            block = image[y:y + k, x:x + k]
+            result[y:y + k, x:x + k] = block.mean(axis=(0, 1))
+    return result
 
 
 def blur(image, method):
