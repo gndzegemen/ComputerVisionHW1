@@ -6,7 +6,6 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-from numpy.lib.stride_tricks import sliding_window_view
 from ultralytics import YOLO
 
 
@@ -26,14 +25,13 @@ YOLO_PATH = MODEL_DIR / "yolov8n-seg.pt"
 TARGET_PATH = MODEL_DIR / "target_face.npy"
 
 BLUR_KERNEL = 61
-SAMPLE_STEP = 8
 MATCH_THRESHOLD = 0.363
 TARGET_MEMORY = 10
 
-BLUR_METHODS = ["Gaussian", "Mean", "Median", "Pixelation"]
+BLUR_METHODS = ["Gaussian", "Mean", "Pixelation"]
 WINDOW = "Anonymizer"
 MODE_TRACKBAR = "Mode 1-3"
-BLUR_TRACKBAR = "Blur 0-3"
+BLUR_TRACKBAR = "Blur 0-2"
 
 
 def download_if_missing(url, path):
@@ -85,39 +83,6 @@ def mean_blur(image, k):
     return apply_separable(image, mean_matrix(h, k), mean_matrix(w, k))
 
 
-def sample_windows(image, k):
-    size = (k // SAMPLE_STEP) | 1
-    radius = size // 2
-    start = SAMPLE_STEP // 2
-    samples = image[start::SAMPLE_STEP, start::SAMPLE_STEP].astype(np.float32)
-    padded = np.pad(samples, ((radius, radius), (radius, radius), (0, 0)), mode="edge")
-    return sliding_window_view(padded, (size, size), axis=(0, 1))
-
-
-@lru_cache(maxsize=None)
-def upsample_matrix(n_out, n_in):
-    position = np.clip((np.arange(n_out) + 0.5) * n_in / n_out - 0.5, 0, n_in - 1)
-    left = np.floor(position).astype(int)
-    right = np.minimum(left + 1, n_in - 1)
-    fraction = (position - left).astype(np.float32)
-    matrix = np.zeros((n_out, n_in), np.float32)
-    rows = np.arange(n_out)
-    matrix[rows, left] += 1 - fraction
-    matrix[rows, right] += fraction
-    return matrix
-
-
-def upsample(small, h, w):
-    return apply_separable(small, upsample_matrix(h, small.shape[0]), upsample_matrix(w, small.shape[1]))
-
-
-def median_blur(image, k):
-    windows = sample_windows(image, k)
-    medians = np.median(windows, axis=(-2, -1))
-    h, w = image.shape[:2]
-    return upsample(medians, h, w)
-
-
 def pixelate(image, k):
     h, w = image.shape[:2]
     padded = np.pad(image, ((0, -h % k), (0, -w % k), (0, 0)), mode="edge")
@@ -131,8 +96,6 @@ def blur(image, method):
         return gaussian_blur(image, BLUR_KERNEL)
     if method == "Mean":
         return mean_blur(image, BLUR_KERNEL)
-    if method == "Median":
-        return median_blur(image, BLUR_KERNEL)
     return pixelate(image, BLUR_KERNEL)
 
 
