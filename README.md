@@ -1,3 +1,11 @@
 # Privacy-Preserving Video Anonymization
 
-A real-time OpenCV application that anonymizes a live camera feed by keeping only faces, people, or a single registered person sharp while blurring everything else.
+Real-time video anonymization with YuNet, SFace and YOLOv8 that keeps only faces, people, or a registered person sharp and blurs the rest.
+
+## Run
+
+```bash
+pip install -r requirements.txt
+python anonymize.py
+python anonymize.py video.mp4
+```
