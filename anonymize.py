@@ -1,7 +1,6 @@
 import sys
 import time
 import urllib.request
-from functools import lru_cache
 from pathlib import Path
 
 import cv2
@@ -51,37 +50,34 @@ face_recognizer = cv2.FaceRecognizerSF.create(str(SFACE_PATH), "")
 person_model = YOLO(str(YOLO_PATH))
 
 
-def apply_separable(image, row_matrix, col_matrix):
-    channels = image.astype(np.float32).transpose(2, 0, 1)
-    result = row_matrix @ channels @ col_matrix.T
-    return np.clip(result.transpose(1, 2, 0), 0, 255).astype(np.uint8)
+def blur_with_weights(image, weights):
+    h, w = image.shape[:2]
+    small = cv2.resize(image, (w // 4, h // 4), interpolation=cv2.INTER_AREA)
+
+    k = len(weights)
+    r = k // 2
+    sh, sw = small.shape[:2]
+    padded = np.pad(small.astype(np.float32), ((r, r), (r, r), (0, 0)), mode="edge")
+    vertical = sum(weights[i] * padded[i:i + sh, :] for i in range(k))
+    result = sum(weights[j] * vertical[:, j:j + sw] for j in range(k))
+
+    blurred = np.clip(result, 0, 255).astype(np.uint8)
+    return cv2.resize(blurred, (w, h), interpolation=cv2.INTER_LINEAR)
 
 
-@lru_cache(maxsize=None)
-def gaussian_matrix(n, k):
+def gaussian_weights(k):
     sigma = 0.3 * ((k - 1) * 0.5 - 1) + 0.8
-    index = np.arange(n)
-    distance = index[None, :] - index[:, None]
-    weights = np.exp(-distance ** 2 / (2 * sigma ** 2)) * (np.abs(distance) <= k // 2)
-    return (weights / weights.sum(axis=1, keepdims=True)).astype(np.float32)
+    distance = np.arange(k) - k // 2
+    weights = np.exp(-distance ** 2 / (2 * sigma ** 2))
+    return weights / weights.sum()
 
 
 def gaussian_blur(image, k):
-    h, w = image.shape[:2]
-    return apply_separable(image, gaussian_matrix(h, k), gaussian_matrix(w, k))
-
-
-@lru_cache(maxsize=None)
-def mean_matrix(n, k):
-    index = np.arange(n)
-    distance = index[None, :] - index[:, None]
-    weights = (np.abs(distance) <= k // 2).astype(np.float32)
-    return weights / weights.sum(axis=1, keepdims=True)
+    return blur_with_weights(image, gaussian_weights(k // 4))
 
 
 def mean_blur(image, k):
-    h, w = image.shape[:2]
-    return apply_separable(image, mean_matrix(h, k), mean_matrix(w, k))
+    return blur_with_weights(image, np.ones(k // 4) / (k // 4))
 
 
 def pixelate(image, k):
