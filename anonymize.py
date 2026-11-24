@@ -25,7 +25,8 @@ YOLO_PATH = MODEL_DIR / "yolov8n-seg.pt"
 TARGET_PATH = MODEL_DIR / "target_face.npy"
 
 BLUR_KERNEL = 61
-MATCH_THRESHOLD = 0.363
+MATCH_THRESHOLD = 0.5
+CONFIRM_FRAMES = 3
 TARGET_MEMORY = 10
 
 BLUR_METHODS = ["Gaussian", "Mean", "Pixelation"]
@@ -153,6 +154,7 @@ class TargetPerson:
     def __init__(self):
         self.embedding = np.load(str(TARGET_PATH)) if TARGET_PATH.exists() else None
         self.last_center = None
+        self.matched_frames = 0
         self.missed_frames = 0
 
     def register(self, frame):
@@ -168,6 +170,7 @@ class TargetPerson:
     def clear(self):
         self.embedding = None
         self.last_center = None
+        self.matched_frames = 0
         self.missed_frames = 0
         TARGET_PATH.unlink(missing_ok=True)
         print("All registered people cleared.")
@@ -188,7 +191,9 @@ class TargetPerson:
 
         center, score = self.find_target_face(frame)
 
-        if center is not None:
+        self.matched_frames = self.matched_frames + 1 if center is not None else 0
+        confirmed = self.matched_frames >= CONFIRM_FRAMES
+        if confirmed:
             self.last_center, self.missed_frames = center, 0
         else:
             self.missed_frames += 1
@@ -200,7 +205,7 @@ class TargetPerson:
         h, w = frame.shape[:2]
         cx = min(max(self.last_center[0], 0), w - 1)
         cy = min(max(self.last_center[1], 0), h - 1)
-        info = f"Target similarity: {score:.2f}" if center else "Target (tracking)"
+        info = f"Target similarity: {score:.2f}" if confirmed else "Target (tracking)"
         for person in detect_people(frame):
             if person[cy, cx] > 0:
                 return person, info
